@@ -2,15 +2,17 @@
 
 import streamlit as st
 import json
-from typing import List, Dict, Tuple, Union
+from typing import List, Dict, Tuple
 import math
 import random
+import sqlite3
 
 # Type definitions
 Log = Dict[str, int]  # {"long": diameter} or {"short": diameter}
 Tree = List[Log]      # [root_log, top_log]
 Layer = List[Log]     # [log1, log2, log3, log4]
 
+# TODO: Add as inputs
 DIAMETER_REDUCTION_MIN = 40  # Top log is 40-50mm narrower than root log
 DIAMETER_REDUCTION_MAX = 50
 ROOT_LOG_DIAMETERS = [290, 280, 270]  # Possible root log diameters
@@ -32,9 +34,9 @@ def get_log_diameter(log: Log) -> int:
     """Get the diameter of a log."""
     return log.get('long') or log.get('short')
 
-def optimize_log_cabin(existing_logs: List[Log]) -> Tuple[List[Tree], List[Layer], Dict]:
+def optimize_logs(existing_logs: List[Log]) -> Tuple[List[Tree], List[Layer], Dict]:
     """
-    Optimize log cabin construction.
+    Optimize logs.
     
     Args:
         existing_logs: List of existing logs in format [{"long": 260}, {"short": 210}, ...]
@@ -55,10 +57,6 @@ def optimize_log_cabin(existing_logs: List[Log]) -> Tuple[List[Tree], List[Layer
     # Generate new logs from trees
     new_logs = []
     trees = []
-    
-    # Create trees with optimal diameter distribution
-    existing_diameters = [get_log_diameter(log) for log in existing_logs]
-    avg_existing = sum(existing_diameters) / len(existing_diameters) if existing_diameters else 220
     
     for i in range(trees_to_cut):
         # Select root diameter from allowed values
@@ -128,16 +126,71 @@ def format_log_display(log):
     else:
         return f"short: {diameter}"
 
+# Database functions
+def init_db():
+    """Initialize the database and create tables if they don't exist"""
+    conn = sqlite3.connect("app.db", check_same_thread=False)
+    conn.execute("CREATE TABLE IF NOT EXISTS existing_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, log_data TEXT)")
+    conn.commit()
+    return conn
+
+def save_logs_to_db(logs):
+    """Save logs list to database"""
+    conn = init_db()
+    conn.execute("DELETE FROM existing_logs")
+    for log in logs:
+        log_json = json.dumps(log)
+        conn.execute("INSERT INTO existing_logs (log_data) VALUES (?)", (log_json,))
+    conn.commit()
+    conn.close()
+
+def load_logs_from_db():
+    """Load logs from database"""
+    conn = init_db()
+    cur = conn.execute("SELECT log_data FROM existing_logs")
+    rows = cur.fetchall()
+    conn.close()
+    
+    logs = []
+    for row in rows:
+        try:
+            log = json.loads(row[0])
+            logs.append(log)
+        except json.JSONDecodeError:
+            continue
+    return logs
+
+def add_log_to_db(log):
+    """Add a single log to database"""
+    logs = load_logs_from_db()
+    logs.append(log)
+    save_logs_to_db(logs)
+
+def delete_log_from_db(index):
+    """Delete log at specific index"""
+    logs = load_logs_from_db()
+    if 0 <= index < len(logs):
+        logs.pop(index)
+        save_logs_to_db(logs)
+
+def clear_logs_in_db():
+    """Clear all logs from database"""
+    conn = init_db()
+    conn.execute("DELETE FROM existing_logs")
+    conn.commit()
+    conn.close()
+
 # Streamlit App
 def main():
-    st.set_page_config(page_title="Log Cabin Optimizer", page_icon="🏠", layout="wide")
-    
-    st.title("🏠 Log Cabin Optimizer")
-    st.markdown("**Optimize your log cabin construction by minimizing trees to cut while maintaining flat, even layers**")
+    st.set_page_config(page_title="Log Optimizer", page_icon="🏠", layout="wide")
+    st.title("Log Optimizer")
+
+    # Initialize database
+    init_db()
     
     # Sidebar for input
     with st.sidebar:
-        st.header("📝 Input Your Existing Logs")
+        st.header("Add Existing Logs")
         
         # Method selection
         input_method = st.radio(
@@ -150,97 +203,112 @@ def main():
         if input_method == "Simple Form":
             st.subheader("Add logs one by one:")
             
-            # Display current logs
-            if 'logs' not in st.session_state:
-                st.session_state.logs = []
+            # Load current logs from database
+            current_logs = load_logs_from_db()
             
             # Add new log
             col1, col2 = st.columns(2)
             with col1:
-                log_type = st.selectbox("Type", ["long", "short"])
+                log_type = st.radio("Type", ["long", "short"])
             with col2:
-                diameter = st.number_input("Diameter (mm)", min_value=200, max_value=350, value=270, step=10)
+                diameter = st.number_input("Diameter (mm)", min_value=100, max_value=400, value=270, step=10)
             
             if st.button("➕ Add Log"):
-                st.session_state.logs.append({log_type: diameter})
+                add_log_to_db({log_type: diameter})
                 st.rerun()
             
             # Show current logs
-            if st.session_state.logs:
+            if current_logs:
                 st.subheader("Current logs:")
-                for i, log in enumerate(st.session_state.logs):
+                for i, log in enumerate(current_logs):
                     col1, col2 = st.columns([3, 1])
                     with col1:
                         st.write(f"{format_log_display(log)}")
                     with col2:
                         if st.button("🗑️", key=f"del_{i}"):
-                            st.session_state.logs.pop(i)
+                            delete_log_from_db(i)
                             st.rerun()
                             
                 if st.button("🗑️ Clear All"):
-                    st.session_state.logs = []
+                    clear_logs_in_db()
                     st.rerun()
             
-            existing_logs = st.session_state.logs
+            existing_logs = current_logs
             
         elif input_method == "Quick Add":
             st.subheader("Quick presets:")
             
             if st.button("📦 Small starter (3 logs)"):
-                st.session_state.logs = [
+                preset_logs = [
                     {"long": 270},
                     {"short": 280}, 
                     {"long": 240}
                 ]
+                save_logs_to_db(preset_logs)
                 st.rerun()
                 
             if st.button("📦 Medium set (8 logs)"):
-                st.session_state.logs = [
+                preset_logs = [
                     {"long": 280}, {"long": 280}, {"long": 270}, {"long": 270},
                     {"short": 280}, {"short": 270}, {"short": 260}, {"short": 250}
                 ]
+                save_logs_to_db(preset_logs)
                 st.rerun()
                 
             if st.button("📦 Many long logs (9 logs)"):
-                st.session_state.logs = [
+                preset_logs = [
                     {"long": 280}, {"long": 280}, {"long": 280}, {"long": 280},
                     {"long": 280}, {"long": 280}, {"long": 280}, {"long": 270},
                     {"short": 280}
                 ]
+                save_logs_to_db(preset_logs)
                 st.rerun()
             
             # Show current logs if any
-            if 'logs' in st.session_state and st.session_state.logs:
-                existing_logs = st.session_state.logs
+            current_logs = load_logs_from_db()
+            if current_logs:
+                existing_logs = current_logs
                 st.subheader("Current logs:")
                 for log in existing_logs:
                     st.write(f"• {format_log_display(log)}")
-                    
+            else:
+                existing_logs = []
         else:  # JSON Input
             st.subheader("Paste JSON format:")
+            
+            # Load current logs to populate the text area
+            current_logs = load_logs_from_db()
+            default_value = json.dumps(current_logs) if current_logs else '[{"long": 270}, {"short": 280}, {"long": 240}]'
+            
             json_input = st.text_area(
                 "Logs (JSON)",
-                value='[{"long": 270}, {"short": 280}, {"long": 240}]',
+                value=default_value,
                 height=100
             )
             
             try:
-                existing_logs = json.loads(json_input)
+                parsed_logs = json.loads(json_input)
+                existing_logs = parsed_logs
                 st.success(f"✅ {len(existing_logs)} logs loaded")
+                
+                # Auto-save to database when JSON changes
+                if json_input != default_value:
+                    save_logs_to_db(existing_logs)
+                    
             except json.JSONDecodeError:
                 st.error("❌ Invalid JSON format")
-                existing_logs = []
+                existing_logs = current_logs  # Fall back to current logs
     
     # Main content area
     if existing_logs:
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([2, 1], gap="medium")
         
         with col2:
-            st.subheader("📊 Your Logs Summary")
+            st.subheader("Existing Logs")
             
             # Sort and display existing logs
             existing_flat = flatten_logs(existing_logs)
-            existing_sorted = sorted(existing_flat, key=lambda x: x["diameter"], reverse=True)
+            existing_sorted = sorted(existing_flat, key=lambda x: x["diameter"], reverse=False)
             
             long_count = len([l for l in existing_logs if "long" in l])
             short_count = len([l for l in existing_logs if "short" in l])
@@ -256,15 +324,15 @@ def main():
             st.subheader("Sorted by diameter:")
             for log in existing_sorted:
                 if log['length'] == 'long':
-                    st.write(f"🪵 **[long: {log['diameter']}]**")
+                    st.write(f"🪵 **long: {log['diameter']}**")
                 else:
-                    st.write(f"🪵 **[short: {log['diameter']}]**")
+                    st.write(f"🪵 **short: {log['diameter']}**")
         
         with col1:
-            if st.button("🚀 **OPTIMIZE CABIN**", type="primary", use_container_width=True):
+            if st.button("🚀 **OPTIMIZE LOGS**", type="primary", use_container_width=False):
                 try:
-                    with st.spinner("Optimizing your cabin construction..."):
-                        trees, layers, summary = optimize_log_cabin(existing_logs)
+                    with st.spinner("Optimizing your logs..."):
+                        trees, layers, summary = optimize_logs(existing_logs)
                         
                         result = {
                             "trees_to_cut": summary["trees_to_cut"],
@@ -281,9 +349,9 @@ def main():
                     with col_m1:
                         st.metric("🌲 Trees to cut", result["trees_to_cut"])
                     with col_m2:
-                        st.metric("📏 Cabin height", f"{result['total_height_mm']} mm")
+                        st.metric("📏 Total height", f"{result['total_height_mm']} mm")
                     with col_m3:
-                        st.metric("🏗️ Total layers", len(result["layers"]))
+                        st.metric("🏗️ Total courses", len(result["layers"]))
                     
                     # Trees to cut
                     with st.expander("🌲 **Trees to Cut**", expanded=True):
@@ -300,7 +368,7 @@ def main():
                             st.write(f"**Tree {i:2}:** [{log_info}]")
                     
                     # Layers
-                    with st.expander("🏗️ **Cabin Layers (bottom → top)**", expanded=True):
+                    with st.expander("🏗️ **Courses (bottom → top)**", expanded=True):
                         for i, layer in enumerate(result["layers"], 1):
                             formatted_logs = []
                             diameters = []
@@ -325,25 +393,25 @@ def main():
                             else:
                                 icon = "🔴"
                                 
-                            st.write(f"**Layer {i:2}:** [{log_info}] {icon} (avg: {avg_diameter:.0f}mm, variation: {variation}mm)")
+                            st.write(f"**Course {i:2}:** [{log_info}] {icon} (avg: {avg_diameter:.0f}mm, variation: {variation}mm)")
                     
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
     else:
-        st.info("👆 **Add your existing logs using the sidebar to get started!**")
+        st.info("👈 **Add existing logs using the sidebar to get started!**")
         
         # Show example
-        st.subheader("📖 How it works:")
+        st.subheader("How it works:")
         st.markdown("""
         1. **Add your existing logs** using the sidebar (any combination of long/short logs)
         2. **Click optimize** to get a cutting plan
-        3. **View results** showing exactly which trees to cut and how to arrange layers
+        3. **View results** showing exactly which trees to cut and how to arrange courses
         
         **The optimizer will:**
         - ✅ Minimize the number of trees you need to cut
-        - ✅ Ensure each layer has exactly 2 long + 2 short logs  
-        - ✅ Create flat, even layers by matching similar diameters
-        - ✅ Arrange layers with thickest at bottom, thinnest at top
+        - ✅ Ensure each course has exactly 2 long + 2 short logs  
+        - ✅ Create flat, even courses by matching similar diameters
+        - ✅ Arrange courses with thickest at bottom, thinnest at top
         """)
 
 if __name__ == "__main__":
