@@ -4,7 +4,6 @@ import streamlit as st
 import json
 from typing import List, Dict, Tuple
 import math
-import random
 import sqlite3
 
 # Type definitions
@@ -12,13 +11,8 @@ Log = Dict[str, int]  # {"long": diameter} or {"short": diameter}
 Tree = List[Log]      # [root_log, top_log]
 Layer = List[Log]     # [log1, log2, log3, log4]
 
-# TODO: Add as inputs
-# TODO: Add lengths and långdragsinskning
-DIAMETER_REDUCTION_MIN = 40  # Top log is 40-50mm narrower than root log
-DIAMETER_REDUCTION_MAX = 50
-LONG_LENGTH = 5150
-SHORT_LENGTH = 4050
-DIAMETER_REDUCTION_PER_METER = 10
+# TODO: add långdragsinskning (not bottom layer)
+# course alternations?
 
 def flatten_logs(logs):
     flat = []
@@ -35,18 +29,47 @@ def get_log_diameter(log: Log) -> int:
     """Get the diameter of a log."""
     return log.get('long') or log.get('short')
 
-def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameters: List[int]) -> Tuple[List[Tree], List[Layer], Dict]:
+def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameters: List[int], 
+                 long_length: int, short_length: int, diameter_reduction_per_meter: int, shrinkage_percentage: float, bark_thickness: int, belly_groove_reduction: int, minimum_wall_height: int = None) -> Tuple[List[Tree], List[Layer], Dict]:
     """
     Optimize logs.
     
     Args:
         existing_logs: List of existing logs in format [{"long": 260}, {"short": 210}, ...]
-        layers_count: Number of layers (courses) to build
+        layers_count: Number of layers (courses) to build (None if using minimum_wall_height)
         root_log_diameters: Available root log diameters for new trees
+        long_length: Length of long logs in mm
+        short_length: Length of short logs in mm
+        diameter_reduction_per_meter: Diameter reduction per meter of tree length
+        shrinkage_percentage: Percentage of diameter reduction due to wood shrinkage
+        bark_thickness: Thickness of bark to subtract from diameter for wall height calculations
+        belly_groove_reduction: Wall height reduction due to belly groove, affects all logs except bottom one
+        minimum_wall_height: Minimum desired wall height in mm (None if using layers_count)
     
     Returns:
         Tuple of (trees_to_cut, layers, summary)
     """
+    # If minimum wall height is specified, calculate required layers_count
+    if minimum_wall_height is not None:
+        # Estimate average log height after all reductions
+        avg_log_diameter = sum(root_log_diameters) / len(root_log_diameters)
+        estimated_first_layer_height = max(0, avg_log_diameter - bark_thickness) * (1 - shrinkage_percentage/100)
+        estimated_other_layer_height = max(0, avg_log_diameter - bark_thickness - belly_groove_reduction) * (1 - shrinkage_percentage/100)
+        
+        # Calculate how many layers we need
+        if estimated_other_layer_height <= 0:
+            layers_count = 1
+        else:
+            remaining_height = minimum_wall_height - estimated_first_layer_height
+            if remaining_height <= 0:
+                layers_count = 1
+            else:
+                additional_layers = math.ceil(remaining_height / estimated_other_layer_height)
+                layers_count = 1 + additional_layers
+        
+        # Cap at reasonable maximum
+        layers_count = min(layers_count, 30)
+    
     total_logs_needed = layers_count * 4
     existing_logs_count = len(existing_logs)
     additional_logs_needed = total_logs_needed - existing_logs_count
@@ -65,24 +88,36 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
         # Select root diameter from allowed values
         root_diameter = root_log_diameters[i % len(root_log_diameters)]
         
-        # Random diameter reduction between 40-50mm
-        diameter_reduction = random.randint(DIAMETER_REDUCTION_MIN, DIAMETER_REDUCTION_MAX)
-        top_diameter = root_diameter - diameter_reduction
-        
         # Tree can yield [short, short], [long, long], [short, long], or [long, short]
         tree_type = i % 4
         if tree_type == 0:  # [short, short]
-            log1 = {"short": root_diameter}
-            log2 = {"short": top_diameter}
+            # First log: middle at short_length/2
+            log1_middle_diameter = root_diameter - (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # Second log: middle at short_length + short_length/2
+            log2_middle_diameter = root_diameter - (short_length + short_length/2) * (diameter_reduction_per_meter / 1000)
+            log1 = {"short": int(log1_middle_diameter)}
+            log2 = {"short": int(log2_middle_diameter)}
         elif tree_type == 1:  # [long, long]
-            log1 = {"long": root_diameter}
-            log2 = {"long": top_diameter}
+            # First log: middle at long_length/2
+            log1_middle_diameter = root_diameter - (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # Second log: middle at long_length + long_length/2
+            log2_middle_diameter = root_diameter - (long_length + long_length/2) * (diameter_reduction_per_meter / 1000)
+            log1 = {"long": int(log1_middle_diameter)}
+            log2 = {"long": int(log2_middle_diameter)}
         elif tree_type == 2:  # [short, long]
-            log1 = {"short": root_diameter}
-            log2 = {"long": top_diameter}
+            # First log: middle at short_length/2
+            log1_middle_diameter = root_diameter - (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # Second log: middle at short_length + long_length/2
+            log2_middle_diameter = root_diameter - (short_length + long_length/2) * (diameter_reduction_per_meter / 1000)
+            log1 = {"short": int(log1_middle_diameter)}
+            log2 = {"long": int(log2_middle_diameter)}
         else:  # [long, short]
-            log1 = {"long": root_diameter}
-            log2 = {"short": top_diameter}
+            # First log: middle at long_length/2
+            log1_middle_diameter = root_diameter - (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # Second log: middle at long_length + short_length/2
+            log2_middle_diameter = root_diameter - (long_length + short_length/2) * (diameter_reduction_per_meter / 1000)
+            log1 = {"long": int(log1_middle_diameter)}
+            log2 = {"short": int(log2_middle_diameter)}
         
         trees.append([log1, log2])
         new_logs.extend([log1, log2])
@@ -110,13 +145,75 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
     # Sort layers by average diameter (thickest at bottom)
     layers.sort(key=lambda layer: sum(get_log_diameter(log) for log in layer) / len(layer), reverse=True)
     
-    # Calculate total cabin height (sum of layer heights - one diameter per layer)
-    total_height = sum(get_log_diameter(layer[0]) for layer in layers)  # Use first log of each layer as representative
+    # Calculate total cabin height and add accumulated heights after shrinkage
+    total_height = 0
+    for i, layer in enumerate(layers):
+        layer_height = max(0, get_log_diameter(layer[0]) - bark_thickness)  # Subtract bark
+        if i > 0:  # Apply belly groove reduction to all layers except the bottom one (index 0)
+            layer_height = max(0, layer_height - belly_groove_reduction)
+        total_height += layer_height
+    
+    total_height_after_shrinkage = total_height * (1 - shrinkage_percentage/100)
+    
+    # Add accumulated height to each layer
+    accumulated_height = 0
+    for i, layer in enumerate(layers):
+        layer_height = max(0, get_log_diameter(layer[0]) - bark_thickness)  # Representative height for this layer, subtract bark
+        if i > 0:  # Apply belly groove reduction to all layers except the bottom one (index 0)
+            layer_height = max(0, layer_height - belly_groove_reduction)
+        layer_height_after_shrinkage = layer_height * (1 - shrinkage_percentage/100)
+        accumulated_height += layer_height_after_shrinkage
+        # Add accumulated height as metadata to the layer
+        layer.append({"_accumulated_height": round(accumulated_height, 1)})
     
     summary = {
         "trees_to_cut": trees_to_cut,
-        "total_height": total_height
+        "total_height": total_height,
+        "total_height_after_shrinkage": round(total_height_after_shrinkage, 1)
     }
+    
+    # If minimum wall height is specified, keep adding layers until requirement is met
+    if minimum_wall_height is not None:
+        while total_height_after_shrinkage < minimum_wall_height and len(layers) < 30:  # Safety cap
+            # Add one more layer with average diameter logs
+            avg_diameter = sum(root_log_diameters) / len(root_log_diameters)
+            extra_layer = [{"long": int(avg_diameter)}, {"long": int(avg_diameter)}, {"short": int(avg_diameter)}, {"short": int(avg_diameter)}]
+            layers.append(extra_layer)
+            
+            # Calculate height contribution of this extra layer
+            extra_layer_height = max(0, avg_diameter - bark_thickness - belly_groove_reduction)  # Apply all reductions
+            total_height += extra_layer_height
+            total_height_after_shrinkage = total_height * (1 - shrinkage_percentage/100)
+            
+            # Update trees_to_cut (need 2 more logs = 1 more tree)
+            trees_to_cut += 1
+            # Add the tree for the extra logs (consistent with original tree structure)
+            log1 = {"long": int(avg_diameter)}
+            log2 = {"short": int(avg_diameter)}
+            trees.append([log1, log2])
+        
+        # Recalculate accumulated height for all layers after adding extra layers
+        accumulated_height = 0
+        for i, layer in enumerate(layers):
+            # Skip metadata if it exists
+            logs_in_layer = [log for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)]
+            if logs_in_layer:
+                layer_height = max(0, get_log_diameter(logs_in_layer[0]) - bark_thickness)
+                if i > 0:
+                    layer_height = max(0, layer_height - belly_groove_reduction)
+                layer_height_after_shrinkage = layer_height * (1 - shrinkage_percentage/100)
+                accumulated_height += layer_height_after_shrinkage
+                
+                # Remove existing metadata and add updated accumulated height
+                layer[:] = logs_in_layer  # Keep only the log dictionaries
+                layer.append({"_accumulated_height": round(accumulated_height, 1)})
+        
+        # Update summary with final values
+        summary = {
+            "trees_to_cut": trees_to_cut,
+            "total_height": total_height,
+            "total_height_after_shrinkage": round(total_height_after_shrinkage, 1)
+        }
     
     return trees, layers, summary
 
@@ -195,13 +292,57 @@ def main():
     # Sidebar for input
     with st.sidebar:
         st.header("Configuration")
-        layers_count = st.number_input("Number of courses", min_value=1, max_value=20, value=9, step=1)
+        
+        # Choose between courses or minimum height
+        build_method = st.radio(
+            "Build method:",
+            ["Minimum wall height", "Number of courses"]
+        )
+        
+        if build_method == "Minimum wall height":
+            minimum_wall_height = st.number_input("Minimum wall height (mm)", min_value=500, max_value=5000, value=1740, step=50)
+            layers_count = None
+        else:
+            layers_count = st.number_input("Number of courses", min_value=1, max_value=20, value=9, step=1)
+            minimum_wall_height = None
+        
+        st.subheader("Log dimensions")
+        long_length = st.number_input(
+            "Long log length (mm)", 
+            min_value=3000, max_value=8000, value=5150, step=50,
+            help="Length of long logs in millimeters"
+        )
+        short_length = st.number_input(
+            "Short log length (mm)", 
+            min_value=2000, max_value=6000, value=4050, step=50,
+            help="Length of short logs in millimeters"
+        )
+        diameter_reduction_per_meter = st.number_input(
+            "Diameter reduction per meter (mm/m)", 
+            min_value=5, max_value=20, value=10, step=1,
+            help="How many millimeters the tree diameter reduces per meter of length"
+        )
+        shrinkage_percentage = st.number_input(
+            "Wood shrinkage (%)", 
+            min_value=0, max_value=20, value=6, step=1,
+            help="Percentage of diameter reduction due to wood shrinkage after drying"
+        )
+        bark_thickness = st.number_input(
+            "Bark thickness (mm)", 
+            min_value=0, max_value=50, value=20, step=1,
+            help="Thickness of bark at root log center, to subtract from diameter for wall height calculations"
+        )
+        belly_groove_reduction = st.number_input(
+            "Belly groove reduction (mm)", 
+            min_value=0, max_value=50, value=25, step=1,
+            help="Wall height reduction due to cutting of the belly groove, affects all logs except the bottom one"
+        )
         
         # Root log diameters input
         st.subheader("Available tree sizes")
         diameter_input = st.text_input(
             "Root log center diameters with bark in mm, comma-separated)",
-            value="290, 280, 270",
+            value="287",
             help="Enter the available root log center diameters with bark in mm, comma-separated"
         )
         
@@ -219,11 +360,12 @@ def main():
         st.divider()
         
         st.header("Add Existing Logs")
+        st.info("💡 Diameters are entered as root log center diameters with bark in mm")
         
         # Method selection
         input_method = st.radio(
             "Choose input method:",
-            ["Simple Form", "JSON Input", "Quick Add"]
+            ["Simple Form", "JSON Input"]
         )
         
         existing_logs = []
@@ -239,7 +381,7 @@ def main():
             with col1:
                 log_type = st.radio("Type", ["long", "short"])
             with col2:
-                diameter = st.number_input("Diameter (mm)", min_value=100, max_value=400, value=270, step=10)
+                diameter = st.number_input("Diameter (mm)", min_value=100, max_value=400, value=287, step=10)
             
             if st.button("➕ Add Log"):
                 add_log_to_db({log_type: diameter})
@@ -263,50 +405,12 @@ def main():
             
             existing_logs = current_logs
             
-        elif input_method == "Quick Add":
-            st.subheader("Quick presets:")
-            
-            if st.button("📦 Small starter (3 logs)"):
-                preset_logs = [
-                    {"long": 270},
-                    {"short": 280}, 
-                    {"long": 240}
-                ]
-                save_logs_to_db(preset_logs)
-                st.rerun()
-                
-            if st.button("📦 Medium set (8 logs)"):
-                preset_logs = [
-                    {"long": 280}, {"long": 280}, {"long": 270}, {"long": 270},
-                    {"short": 280}, {"short": 270}, {"short": 260}, {"short": 250}
-                ]
-                save_logs_to_db(preset_logs)
-                st.rerun()
-                
-            if st.button("📦 Many long logs (9 logs)"):
-                preset_logs = [
-                    {"long": 280}, {"long": 280}, {"long": 280}, {"long": 280},
-                    {"long": 280}, {"long": 280}, {"long": 280}, {"long": 270},
-                    {"short": 280}
-                ]
-                save_logs_to_db(preset_logs)
-                st.rerun()
-            
-            # Show current logs if any
-            current_logs = load_logs_from_db()
-            if current_logs:
-                existing_logs = current_logs
-                st.subheader("Current logs:")
-                for log in existing_logs:
-                    st.write(f"• {format_log_display(log)}")
-            else:
-                existing_logs = []
         else:  # JSON Input
             st.subheader("Paste JSON format:")
             
             # Load current logs to populate the text area
             current_logs = load_logs_from_db()
-            default_value = json.dumps(current_logs) if current_logs else '[{"long": 270}, {"short": 280}, {"long": 240}]'
+            default_value = json.dumps(current_logs) if current_logs else '[{"long": 287}, {"short": 287}, {"long": 287}, {"short": 287}]'
             
             json_input = st.text_area(
                 "Logs (JSON)",
@@ -368,13 +472,17 @@ def main():
         if st.button(button_text, type="primary", use_container_width=False):
             try:
                 with st.spinner("Optimizing your logs..."):
-                    trees, layers, summary = optimize_logs(existing_logs, layers_count, root_log_diameters)
+                    trees, layers, summary = optimize_logs(
+                        existing_logs, layers_count, root_log_diameters,
+                        long_length, short_length, diameter_reduction_per_meter, shrinkage_percentage, bark_thickness, belly_groove_reduction, minimum_wall_height
+                    )
                     
                     result = {
                         "trees_to_cut": summary["trees_to_cut"],
                         "trees": trees,
                         "layers": layers,
                         "total_height_mm": round(summary["total_height"], 1),
+                        "total_height_after_shrinkage_mm": summary["total_height_after_shrinkage"],
                     }
                 
                 # Display results
@@ -385,7 +493,7 @@ def main():
                 with col_m1:
                     st.metric("🌲 Trees to cut", result["trees_to_cut"])
                 with col_m2:
-                    st.metric("📏 Total height", f"{result['total_height_mm']} mm")
+                    st.metric("📏 Wall height after shrinkage", f"{result['total_height_after_shrinkage_mm']} mm")
                 with col_m3:
                     st.metric("🏗️ Total courses", len(result["layers"]))
                 
@@ -408,14 +516,19 @@ def main():
                     for i, layer in enumerate(result["layers"], 1):
                         formatted_logs = []
                         diameters = []
+                        accumulated_height = None
+                        
                         for log in layer:
-                            length = list(log.keys())[0]
-                            diameter = list(log.values())[0]
-                            diameters.append(diameter)
-                            if length == 'long':
-                                formatted_logs.append(f"long: {diameter}")
+                            if isinstance(log, dict) and "_accumulated_height" in log:
+                                accumulated_height = log["_accumulated_height"]
                             else:
-                                formatted_logs.append(f"short: {diameter}")
+                                length = list(log.keys())[0]
+                                diameter = list(log.values())[0]
+                                diameters.append(diameter)
+                                if length == 'long':
+                                    formatted_logs.append(f"long: {diameter}")
+                                else:
+                                    formatted_logs.append(f"short: {diameter}")
                         
                         log_info = ", ".join(formatted_logs)
                         variation = max(diameters) - min(diameters)
@@ -428,8 +541,9 @@ def main():
                             icon = "🟡"
                         else:
                             icon = "🔴"
-                            
-                        st.write(f"**Course {i:2}:** [{log_info}] {icon} (avg: {avg_diameter:.0f}mm, variation: {variation}mm)")
+                        
+                        height_info = f" | wall height: {accumulated_height}mm" if accumulated_height else ""
+                        st.write(f"**Course {i:2}:** [{log_info}] {icon} (avg: {avg_diameter:.0f}mm, variation: {variation}mm{height_info})")
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
