@@ -97,6 +97,7 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2_middle_diameter = required_root_diameter - (short_length + short_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"short": int(log1_middle_diameter)}
             log2 = {"short": int(log2_middle_diameter)}
+            tree_dbh = int(required_root_diameter)
         elif tree_type == 1:  # [long, long]
             # Calculate required root diameter to achieve desired middle diameter for first long log
             required_root_diameter = desired_first_log_middle_diameter + (long_length/2) * (diameter_reduction_per_meter / 1000)
@@ -106,6 +107,7 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2_middle_diameter = required_root_diameter - (long_length + long_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"long": int(log1_middle_diameter)}
             log2 = {"long": int(log2_middle_diameter)}
+            tree_dbh = int(required_root_diameter)
         elif tree_type == 2:  # [short, long]
             # Calculate required root diameter to achieve desired middle diameter for first short log
             required_root_diameter = desired_first_log_middle_diameter + (short_length/2) * (diameter_reduction_per_meter / 1000)
@@ -115,6 +117,7 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2_middle_diameter = required_root_diameter - (short_length + long_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"short": int(log1_middle_diameter)}
             log2 = {"long": int(log2_middle_diameter)}
+            tree_dbh = int(required_root_diameter)
         else:  # [long, short]
             # Calculate required root diameter to achieve desired middle diameter for first long log
             required_root_diameter = desired_first_log_middle_diameter + (long_length/2) * (diameter_reduction_per_meter / 1000)
@@ -124,8 +127,9 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2_middle_diameter = required_root_diameter - (long_length + short_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"long": int(log1_middle_diameter)}
             log2 = {"short": int(log2_middle_diameter)}
+            tree_dbh = int(required_root_diameter)
         
-        trees.append([log1, log2])
+        trees.append({"logs": [log1, log2], "dbh": tree_dbh})
         new_logs.extend([log1, log2])
     
     # Combine existing and new logs
@@ -259,7 +263,10 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             # Add the tree for the extra logs (consistent with original tree structure)
             log1 = {"long": int(avg_diameter)}
             log2 = {"short": int(avg_diameter)}
-            trees.append([log1, log2])
+            # Calculate DBH properly: add taper from middle of first log back to tree base
+            # First log is long, so middle is at long_length/2 from base
+            extra_tree_dbh = int(avg_diameter + (long_length/2) * (diameter_reduction_per_meter / 1000))
+            trees.append({"logs": [log1, log2], "dbh": extra_tree_dbh})
         
         # Re-sort layers by average diameter after adding extra layers (thickest at bottom)
         layers.sort(key=lambda layer: sum(get_log_diameter(log) for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)) / len([log for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)]), reverse=True)
@@ -592,10 +599,11 @@ def main():
                     st.metric("📏 Final height (dried & belly grooved)", f"{result['total_height_after_shrinkage_mm']} mm")
                 
                 # Trees to cut
-                with st.expander("🌲 **Trees to Cut** (middle diameters)", expanded=True):
+                with st.expander("🌲 **Trees to Cut**", expanded=True):
                     for i, tree in enumerate(result["trees"], 1):
                         formatted_logs = []
-                        for log in tree:
+                        logs = tree["logs"] if isinstance(tree, dict) and "logs" in tree else tree
+                        for log in logs:
                             length = list(log.keys())[0]
                             diameter = list(log.values())[0]
                             if length == 'long':
@@ -603,7 +611,13 @@ def main():
                             else:
                                 formatted_logs.append(f"{diameter}S")
                         log_info = ", ".join(formatted_logs)
-                        st.write(f"**Tree {i:2}:** [{log_info}]")
+                        
+                        # Add DBH if available
+                        dbh_info = ""
+                        if isinstance(tree, dict) and "dbh" in tree:
+                            dbh_info = f" - (*{tree['dbh']} DBH*)"
+                        
+                        st.write(f"**Tree {i:2}:** [{log_info}]{dbh_info}")
                 
                 # Layers
                 with st.expander("🏗️ **Courses (bottom → top)**", expanded=True):
