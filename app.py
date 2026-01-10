@@ -11,9 +11,6 @@ Log = Dict[str, int]  # {"long": diameter} or {"short": diameter}
 Tree = List[Log]      # [root_log, top_log]
 Layer = List[Log]     # [log1, log2, log3, log4]
 
-# TODO: add långdragsinskning (not bottom layer)
-# course alternations?
-
 def flatten_logs(logs):
     flat = []
     for log in logs:
@@ -85,37 +82,46 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
     trees = []
     
     for i in range(trees_to_cut):
-        # Select root diameter from allowed values
-        root_diameter = root_log_diameters[i % len(root_log_diameters)]
+        # Select desired middle diameter for the first log from allowed values
+        desired_first_log_middle_diameter = root_log_diameters[i % len(root_log_diameters)]
         
         # Tree can yield [short, short], [long, long], [short, long], or [long, short]
         tree_type = i % 4
         if tree_type == 0:  # [short, short]
-            # First log: middle at short_length/2
-            log1_middle_diameter = root_diameter - (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # Calculate required root diameter to achieve desired middle diameter for first short log
+            # First log middle at short_length/2, so root = desired + taper_to_middle
+            required_root_diameter = desired_first_log_middle_diameter + (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # First log: middle at short_length/2 (this will be our desired diameter)
+            log1_middle_diameter = desired_first_log_middle_diameter
             # Second log: middle at short_length + short_length/2
-            log2_middle_diameter = root_diameter - (short_length + short_length/2) * (diameter_reduction_per_meter / 1000)
+            log2_middle_diameter = required_root_diameter - (short_length + short_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"short": int(log1_middle_diameter)}
             log2 = {"short": int(log2_middle_diameter)}
         elif tree_type == 1:  # [long, long]
-            # First log: middle at long_length/2
-            log1_middle_diameter = root_diameter - (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # Calculate required root diameter to achieve desired middle diameter for first long log
+            required_root_diameter = desired_first_log_middle_diameter + (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # First log: middle at long_length/2 (this will be our desired diameter)
+            log1_middle_diameter = desired_first_log_middle_diameter
             # Second log: middle at long_length + long_length/2
-            log2_middle_diameter = root_diameter - (long_length + long_length/2) * (diameter_reduction_per_meter / 1000)
+            log2_middle_diameter = required_root_diameter - (long_length + long_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"long": int(log1_middle_diameter)}
             log2 = {"long": int(log2_middle_diameter)}
         elif tree_type == 2:  # [short, long]
-            # First log: middle at short_length/2
-            log1_middle_diameter = root_diameter - (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # Calculate required root diameter to achieve desired middle diameter for first short log
+            required_root_diameter = desired_first_log_middle_diameter + (short_length/2) * (diameter_reduction_per_meter / 1000)
+            # First log: middle at short_length/2 (this will be our desired diameter)
+            log1_middle_diameter = desired_first_log_middle_diameter
             # Second log: middle at short_length + long_length/2
-            log2_middle_diameter = root_diameter - (short_length + long_length/2) * (diameter_reduction_per_meter / 1000)
+            log2_middle_diameter = required_root_diameter - (short_length + long_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"short": int(log1_middle_diameter)}
             log2 = {"long": int(log2_middle_diameter)}
         else:  # [long, short]
-            # First log: middle at long_length/2
-            log1_middle_diameter = root_diameter - (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # Calculate required root diameter to achieve desired middle diameter for first long log
+            required_root_diameter = desired_first_log_middle_diameter + (long_length/2) * (diameter_reduction_per_meter / 1000)
+            # First log: middle at long_length/2 (this will be our desired diameter)
+            log1_middle_diameter = desired_first_log_middle_diameter
             # Second log: middle at long_length + short_length/2
-            log2_middle_diameter = root_diameter - (long_length + short_length/2) * (diameter_reduction_per_meter / 1000)
+            log2_middle_diameter = required_root_diameter - (long_length + short_length/2) * (diameter_reduction_per_meter / 1000)
             log1 = {"long": int(log1_middle_diameter)}
             log2 = {"short": int(log2_middle_diameter)}
         
@@ -145,45 +151,103 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
     # Sort layers by average diameter (thickest at bottom)
     layers.sort(key=lambda layer: sum(get_log_diameter(log) for log in layer) / len(layer), reverse=True)
     
-    # Calculate total cabin height and add accumulated heights after shrinkage
-    total_height = 0
-    for i, layer in enumerate(layers):
-        layer_height = max(0, get_log_diameter(layer[0]) - bark_thickness)  # Subtract bark
-        if i > 0:  # Apply belly groove reduction to all layers except the bottom one (index 0)
-            layer_height = max(0, layer_height - belly_groove_reduction)
-        total_height += layer_height
+    # Calculate total cabin height and add accumulated heights with different calculations
+    total_height_raw = 0
+    total_height_without_bark = 0
+    total_height_final = 0
     
-    total_height_after_shrinkage = total_height * (1 - shrinkage_percentage/100)
-    
-    # Add accumulated height to each layer
-    accumulated_height = 0
+    # First pass: calculate total heights for different scenarios
     for i, layer in enumerate(layers):
-        layer_height = max(0, get_log_diameter(layer[0]) - bark_thickness)  # Representative height for this layer, subtract bark
-        if i > 0:  # Apply belly groove reduction to all layers except the bottom one (index 0)
-            layer_height = max(0, layer_height - belly_groove_reduction)
-        layer_height_after_shrinkage = layer_height * (1 - shrinkage_percentage/100)
-        accumulated_height += layer_height_after_shrinkage
-        # Add accumulated height as metadata to the layer
-        layer.append({"_accumulated_height": round(accumulated_height, 1)})
+        # Calculate average diameter for this layer
+        avg_diameter = sum(get_log_diameter(log) for log in layer) / len(layer)
+        
+        # Raw height (just average diameter)
+        raw_height = avg_diameter
+        total_height_raw += raw_height
+        
+        # Height without bark
+        height_without_bark = max(0, avg_diameter - bark_thickness)
+        total_height_without_bark += height_without_bark
+        
+        # Final height (with proper order: bark removal, then shrinkage, then belly groove)
+        height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+        height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
+        final_height = height_after_shrinkage
+        if i > 0:  # Apply belly groove reduction to all layers except the bottom one
+            final_height = max(0, final_height - belly_groove_reduction)
+        total_height_final += final_height
+    
+    # Final height totals already include shrinkage from individual calculations
+    
+    # Add accumulated heights to each layer with all calculation types
+    accumulated_raw = 0
+    accumulated_without_bark = 0
+    accumulated_final = 0
+    
+    for i, layer in enumerate(layers):
+        # Calculate average diameter for this layer
+        avg_diameter = sum(get_log_diameter(log) for log in layer) / len(layer)
+        
+        # Calculate individual layer heights using proper order
+        raw_height = avg_diameter
+        height_without_bark = max(0, avg_diameter - bark_thickness)
+        
+        # For final height: remove bark, apply shrinkage, then belly groove
+        height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+        height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
+        final_height_after_shrinkage = height_after_shrinkage
+        if i > 0:
+            final_height_after_shrinkage = max(0, final_height_after_shrinkage - belly_groove_reduction)
+        
+        # Update accumulated totals
+        accumulated_raw += raw_height  # No shrinkage for raw
+        accumulated_without_bark += height_without_bark  # No shrinkage for height w/o bark
+        accumulated_final += final_height_after_shrinkage
+        
+        # Add all height data as metadata to the layer
+        layer.append({
+            "_raw_height": round(raw_height),  # No shrinkage for raw
+            "_height_without_bark": round(height_without_bark),  # No shrinkage for height w/o bark
+            "_final_height": round(final_height_after_shrinkage),
+            "_accumulated_raw": round(accumulated_raw),  # No shrinkage for raw
+            "_accumulated_without_bark": round(accumulated_without_bark),  # No shrinkage for height w/o bark
+            "_accumulated_final": round(accumulated_final),
+            "_accumulated_height": round(accumulated_final)  # Keep for backward compatibility
+        })
     
     summary = {
         "trees_to_cut": trees_to_cut,
-        "total_height": total_height,
-        "total_height_after_shrinkage": round(total_height_after_shrinkage, 1)
+        "total_height_raw": total_height_raw,
+        "total_height_raw_after_shrinkage": round(total_height_raw),  # No shrinkage for raw
+        "total_height_without_bark": total_height_without_bark,
+        "total_height_without_bark_after_shrinkage": round(total_height_without_bark),  # No shrinkage for height w/o bark
+        "total_height_final": total_height_final,
+        "total_height_final_after_shrinkage": round(total_height_final),
+        "total_height": total_height_final,  # Keep for backward compatibility
+        "total_height_after_shrinkage": round(total_height_final)  # Keep for backward compatibility
     }
     
     # If minimum wall height is specified, keep adding layers until requirement is met
     if minimum_wall_height is not None:
-        while total_height_after_shrinkage < minimum_wall_height and len(layers) < 30:  # Safety cap
+        while total_height_final < minimum_wall_height and len(layers) < 30:  # Safety cap
             # Add one more layer with average diameter logs
             avg_diameter = sum(root_log_diameters) / len(root_log_diameters)
             extra_layer = [{"long": int(avg_diameter)}, {"long": int(avg_diameter)}, {"short": int(avg_diameter)}, {"short": int(avg_diameter)}]
             layers.append(extra_layer)
             
-            # Calculate height contribution of this extra layer
-            extra_layer_height = max(0, avg_diameter - bark_thickness - belly_groove_reduction)  # Apply all reductions
-            total_height += extra_layer_height
-            total_height_after_shrinkage = total_height * (1 - shrinkage_percentage/100)
+            # Calculate height contribution of this extra layer for all types
+            extra_raw_height = avg_diameter
+            extra_height_without_bark = max(0, avg_diameter - bark_thickness)
+            # For final height: remove bark, apply shrinkage, then belly groove
+            extra_height_after_shrinkage = max(0, avg_diameter - bark_thickness) * (1 - shrinkage_percentage/100)
+            extra_final_height = max(0, extra_height_after_shrinkage - belly_groove_reduction)  # Apply belly groove after shrinkage
+            
+            # Update totals
+            total_height_raw += extra_raw_height
+            total_height_without_bark += extra_height_without_bark
+            total_height_final += extra_final_height
+            
+            # Recalculate - final height already includes shrinkage from individual calculations
             
             # Update trees_to_cut (need 2 more logs = 1 more tree)
             trees_to_cut += 1
@@ -192,27 +256,57 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2 = {"short": int(avg_diameter)}
             trees.append([log1, log2])
         
-        # Recalculate accumulated height for all layers after adding extra layers
-        accumulated_height = 0
+        # Recalculate accumulated heights for all layers after adding extra layers
+        accumulated_raw = 0
+        accumulated_without_bark = 0
+        accumulated_final = 0
+        
         for i, layer in enumerate(layers):
             # Skip metadata if it exists
             logs_in_layer = [log for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)]
             if logs_in_layer:
-                layer_height = max(0, get_log_diameter(logs_in_layer[0]) - bark_thickness)
-                if i > 0:
-                    layer_height = max(0, layer_height - belly_groove_reduction)
-                layer_height_after_shrinkage = layer_height * (1 - shrinkage_percentage/100)
-                accumulated_height += layer_height_after_shrinkage
+                # Calculate average diameter for this layer
+                avg_diameter = sum(get_log_diameter(log) for log in logs_in_layer) / len(logs_in_layer)
                 
-                # Remove existing metadata and add updated accumulated height
+                # Calculate individual layer heights using average diameter and proper order
+                raw_height = avg_diameter
+                height_without_bark = max(0, avg_diameter - bark_thickness)
+                
+                # For final height: remove bark, apply shrinkage, then belly groove
+                height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+                height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
+                final_height_after_shrinkage = height_after_shrinkage
+                if i > 0:
+                    final_height_after_shrinkage = max(0, final_height_after_shrinkage - belly_groove_reduction)
+                
+                # Update accumulated totals
+                accumulated_raw += raw_height  # No shrinkage for raw
+                accumulated_without_bark += height_without_bark  # No shrinkage for height w/o bark
+                accumulated_final += final_height_after_shrinkage
+                
+                # Remove existing metadata and add updated heights
                 layer[:] = logs_in_layer  # Keep only the log dictionaries
-                layer.append({"_accumulated_height": round(accumulated_height, 1)})
+                layer.append({
+                    "_raw_height": round(raw_height),  # No shrinkage for raw
+                    "_height_without_bark": round(height_without_bark),  # No shrinkage for height w/o bark
+                    "_final_height": round(final_height_after_shrinkage),
+                    "_accumulated_raw": round(accumulated_raw),  # No shrinkage for raw
+                    "_accumulated_without_bark": round(accumulated_without_bark),  # No shrinkage for height w/o bark
+                    "_accumulated_final": round(accumulated_final),
+                    "_accumulated_height": round(accumulated_final)  # Keep for backward compatibility
+                })
         
         # Update summary with final values
         summary = {
             "trees_to_cut": trees_to_cut,
-            "total_height": total_height,
-            "total_height_after_shrinkage": round(total_height_after_shrinkage, 1)
+            "total_height_raw": total_height_raw,
+            "total_height_raw_after_shrinkage": round(total_height_raw),  # No shrinkage for raw
+            "total_height_without_bark": total_height_without_bark,
+            "total_height_without_bark_after_shrinkage": round(total_height_without_bark),  # No shrinkage for height w/o bark
+            "total_height_final": total_height_final,
+            "total_height_final_after_shrinkage": round(total_height_final),
+            "total_height": total_height_final,  # Keep for backward compatibility
+            "total_height_after_shrinkage": round(total_height_final)  # Keep for backward compatibility
         }
     
     return trees, layers, summary
@@ -222,9 +316,9 @@ def format_log_display(log):
     length = list(log.keys())[0]
     diameter = list(log.values())[0]
     if length == 'long':
-        return f"long:  {diameter}"
+        return f"{diameter}L"
     else:
-        return f"short: {diameter}"
+        return f"{diameter}S"
 
 # Database functions
 def init_db():
@@ -294,12 +388,12 @@ def main():
         st.header("Configuration")
         
         # Choose between courses or minimum height
-        build_method = st.radio(
-            "Build method:",
+        optimization_method = st.radio(
+            "Optimization method:",
             ["Minimum wall height", "Number of courses"]
         )
         
-        if build_method == "Minimum wall height":
+        if optimization_method == "Minimum wall height":
             minimum_wall_height = st.number_input("Minimum wall height (mm)", min_value=500, max_value=5000, value=1740, step=50)
             layers_count = None
         else:
@@ -341,9 +435,9 @@ def main():
         # Root log diameters input
         st.subheader("Available tree sizes")
         diameter_input = st.text_input(
-            "Root log center diameters with bark in mm, comma-separated)",
+            "Root log middle diameters with bark (in mm, comma-separated)",
             value="287",
-            help="Enter the available root log center diameters with bark in mm, comma-separated"
+            help="Enter the desired diameters with bark at the middle of the first (root) log cut from each tree, comma-separated"
         )
         
         try:
@@ -360,7 +454,7 @@ def main():
         st.divider()
         
         st.header("Add Existing Logs")
-        st.info("💡 Diameters are entered as root log center diameters with bark in mm")
+        st.info("💡 Diameters should be measured at the middle of the root logs with bark")
         
         # Method selection
         input_method = st.radio(
@@ -379,7 +473,7 @@ def main():
             # Add new log
             col1, col2 = st.columns(2)
             with col1:
-                log_type = st.radio("Type", ["long", "short"])
+                log_type = st.radio("Type", ["Long", "Short"])
             with col2:
                 diameter = st.number_input("Diameter (mm)", min_value=100, max_value=400, value=287, step=10)
             
@@ -456,9 +550,9 @@ def main():
             st.subheader("Sorted by diameter:")
             for log in existing_sorted:
                 if log['length'] == 'long':
-                    st.write(f"🪵 **long: {log['diameter']}**")
+                    st.write(f"🪵 **{log['diameter']}L**")
                 else:
-                    st.write(f"🪵 **short: {log['diameter']}**")
+                    st.write(f"🪵 **{log['diameter']}S**")
         else:
             st.info("No existing logs yet")
             st.write("👈 Add logs using the sidebar or optimize with 0 existing logs")
@@ -481,21 +575,30 @@ def main():
                         "trees_to_cut": summary["trees_to_cut"],
                         "trees": trees,
                         "layers": layers,
-                        "total_height_mm": round(summary["total_height"], 1),
-                        "total_height_after_shrinkage_mm": summary["total_height_after_shrinkage"],
+                        "total_height_mm": summary["total_height_final"],
+                        "total_height_after_shrinkage_mm": summary["total_height_final_after_shrinkage"],
+                        "total_height_raw_after_shrinkage_mm": summary["total_height_raw_after_shrinkage"],
+                        "total_height_without_bark_after_shrinkage_mm": summary["total_height_without_bark_after_shrinkage"],
                     }
                 
                 # Display results
                 st.success("✅ Optimization complete!")
                 
                 # Summary metrics
-                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1, col_m2 = st.columns(2)
                 with col_m1:
                     st.metric("🌲 Trees to cut", result["trees_to_cut"])
                 with col_m2:
-                    st.metric("📏 Wall height after shrinkage", f"{result['total_height_after_shrinkage_mm']} mm")
-                with col_m3:
                     st.metric("🏗️ Total courses", len(result["layers"]))
+                
+                 # Summary metrics
+                col_m1, col_m2, col_m3 = st.columns(3)
+                with col_m1:
+                    st.metric("📏 Raw height (no reductions)", f"{result.get('total_height_raw_after_shrinkage_mm', 0)} mm")
+                with col_m2:
+                    st.metric("📏 Height w/o bark", f"{result.get('total_height_without_bark_after_shrinkage_mm', 0)} mm")
+                with col_m3:
+                    st.metric("📏 Final wall height (w/ shrinkage & belly groove)", f"{result['total_height_after_shrinkage_mm']} mm")
                 
                 # Trees to cut
                 with st.expander("🌲 **Trees to Cut**", expanded=True):
@@ -505,9 +608,9 @@ def main():
                             length = list(log.keys())[0]
                             diameter = list(log.values())[0]
                             if length == 'long':
-                                formatted_logs.append(f"long: {diameter}")
+                                formatted_logs.append(f"{diameter}L")
                             else:
-                                formatted_logs.append(f"short: {diameter}")
+                                formatted_logs.append(f"{diameter}S")
                         log_info = ", ".join(formatted_logs)
                         st.write(f"**Tree {i:2}:** [{log_info}]")
                 
@@ -516,19 +619,19 @@ def main():
                     for i, layer in enumerate(result["layers"], 1):
                         formatted_logs = []
                         diameters = []
-                        accumulated_height = None
+                        height_data = {}
                         
                         for log in layer:
-                            if isinstance(log, dict) and "_accumulated_height" in log:
-                                accumulated_height = log["_accumulated_height"]
+                            if isinstance(log, dict) and any(k.startswith('_') for k in log.keys()):
+                                height_data = log
                             else:
                                 length = list(log.keys())[0]
                                 diameter = list(log.values())[0]
                                 diameters.append(diameter)
                                 if length == 'long':
-                                    formatted_logs.append(f"long: {diameter}")
+                                    formatted_logs.append(f"{diameter}L")
                                 else:
-                                    formatted_logs.append(f"short: {diameter}")
+                                    formatted_logs.append(f"{diameter}S")
                         
                         log_info = ", ".join(formatted_logs)
                         variation = max(diameters) - min(diameters)
@@ -542,8 +645,14 @@ def main():
                         else:
                             icon = "🔴"
                         
-                        height_info = f" | wall height: {accumulated_height}mm" if accumulated_height else ""
-                        st.write(f"**Course {i:2}:** [{log_info}] {icon} (avg: {avg_diameter:.0f}mm, variation: {variation}mm{height_info})")
+                        # Build height info string - show both individual course height and accumulated total
+                        height_info = ""
+                        if height_data:
+                            individual_heights = f"Heights: R{height_data.get('_raw_height', 0)}, NB{height_data.get('_height_without_bark', 0)}, F{height_data.get('_final_height', 0)}"
+                            accumulated_heights = f"Total: R{height_data.get('_accumulated_raw', 0)}, NB{height_data.get('_accumulated_without_bark', 0)}, F{height_data.get('_accumulated_final', 0)}"
+                            height_info = f" | {individual_heights} | {accumulated_heights}"
+                        
+                        st.write(f"**Course {i:2}:** [{log_info}] {icon} (x̄: {avg_diameter:.0f} mm, Δ: {variation} mm{height_info})")
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
