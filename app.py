@@ -50,8 +50,8 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
     if minimum_wall_height is not None:
         # Estimate average log height after all reductions
         avg_log_diameter = sum(root_log_diameters) / len(root_log_diameters)
-        estimated_first_layer_height = max(0, avg_log_diameter - bark_thickness) * (1 - shrinkage_percentage/100)
-        estimated_other_layer_height = max(0, avg_log_diameter - bark_thickness - belly_groove_reduction) * (1 - shrinkage_percentage/100)
+        estimated_first_layer_height = max(0, avg_log_diameter - bark_thickness * 2) * (1 - shrinkage_percentage/100)
+        estimated_other_layer_height = max(0, avg_log_diameter - bark_thickness * 2 - belly_groove_reduction) * (1 - shrinkage_percentage/100)
         
         # Calculate how many layers we need
         if estimated_other_layer_height <= 0:
@@ -166,11 +166,11 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
         total_height_raw += raw_height
         
         # Height without bark
-        height_without_bark = max(0, avg_diameter - bark_thickness)
+        height_without_bark = max(0, avg_diameter - bark_thickness * 2)
         total_height_without_bark += height_without_bark
         
         # Final height (with proper order: bark removal, then shrinkage, then belly groove)
-        height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+        height_after_bark_removal = max(0, avg_diameter - bark_thickness * 2)
         height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
         final_height = height_after_shrinkage
         if i > 0:  # Apply belly groove reduction to all layers except the bottom one
@@ -190,10 +190,10 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
         
         # Calculate individual layer heights using proper order
         raw_height = avg_diameter
-        height_without_bark = max(0, avg_diameter - bark_thickness)
+        height_without_bark = max(0, avg_diameter - bark_thickness * 2)
         
         # For final height: remove bark, apply shrinkage, then belly groove
-        height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+        height_after_bark_removal = max(0, avg_diameter - bark_thickness * 2)
         height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
         final_height_after_shrinkage = height_after_shrinkage
         if i > 0:
@@ -232,14 +232,19 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
         while total_height_final < minimum_wall_height and len(layers) < 30:  # Safety cap
             # Add one more layer with average diameter logs
             avg_diameter = sum(root_log_diameters) / len(root_log_diameters)
-            extra_layer = [{"long": int(avg_diameter)}, {"long": int(avg_diameter)}, {"short": int(avg_diameter)}, {"short": int(avg_diameter)}]
+            extra_layer = [
+                {"long": int(avg_diameter)}, 
+                {"long": int(avg_diameter)}, 
+                {"short": int(avg_diameter)}, 
+                {"short": int(avg_diameter)}
+            ]
             layers.append(extra_layer)
             
             # Calculate height contribution of this extra layer for all types
             extra_raw_height = avg_diameter
-            extra_height_without_bark = max(0, avg_diameter - bark_thickness)
+            extra_height_without_bark = max(0, avg_diameter - bark_thickness * 2)
             # For final height: remove bark, apply shrinkage, then belly groove
-            extra_height_after_shrinkage = max(0, avg_diameter - bark_thickness) * (1 - shrinkage_percentage/100)
+            extra_height_after_shrinkage = max(0, avg_diameter - bark_thickness * 2) * (1 - shrinkage_percentage/100)
             extra_final_height = max(0, extra_height_after_shrinkage - belly_groove_reduction)  # Apply belly groove after shrinkage
             
             # Update totals
@@ -256,6 +261,9 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
             log2 = {"short": int(avg_diameter)}
             trees.append([log1, log2])
         
+        # Re-sort layers by average diameter after adding extra layers (thickest at bottom)
+        layers.sort(key=lambda layer: sum(get_log_diameter(log) for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)) / len([log for log in layer if isinstance(log, dict) and ('long' in log or 'short' in log)]), reverse=True)
+        
         # Recalculate accumulated heights for all layers after adding extra layers
         accumulated_raw = 0
         accumulated_without_bark = 0
@@ -270,10 +278,10 @@ def optimize_logs(existing_logs: List[Log], layers_count: int, root_log_diameter
                 
                 # Calculate individual layer heights using average diameter and proper order
                 raw_height = avg_diameter
-                height_without_bark = max(0, avg_diameter - bark_thickness)
+                height_without_bark = max(0, avg_diameter - bark_thickness * 2)
                 
                 # For final height: remove bark, apply shrinkage, then belly groove
-                height_after_bark_removal = max(0, avg_diameter - bark_thickness)
+                height_after_bark_removal = max(0, avg_diameter - bark_thickness * 2)
                 height_after_shrinkage = height_after_bark_removal * (1 - shrinkage_percentage/100)
                 final_height_after_shrinkage = height_after_shrinkage
                 if i > 0:
@@ -423,8 +431,8 @@ def main():
         )
         bark_thickness = st.number_input(
             "Bark thickness (mm)", 
-            min_value=0, max_value=50, value=20, step=1,
-            help="Thickness of bark at root log center, to subtract from diameter for wall height calculations"
+            min_value=0, max_value=25, value=6, step=1,
+            help="Thickness of bark on one side at root log center. Will be doubled in calculations (both sides) to subtract from diameter for wall height calculations"
         )
         belly_groove_reduction = st.number_input(
             "Belly groove reduction (mm)", 
@@ -473,12 +481,12 @@ def main():
             # Add new log
             col1, col2 = st.columns(2)
             with col1:
-                log_type = st.radio("Type", ["Long", "Short"])
-            with col2:
                 diameter = st.number_input("Diameter (mm)", min_value=100, max_value=400, value=287, step=10)
+            with col2:
+                log_type = st.radio("Type", ["Long", "Short"])
             
             if st.button("➕ Add Log"):
-                add_log_to_db({log_type: diameter})
+                add_log_to_db({log_type.lower(): diameter})
                 st.rerun()
             
             # Show current logs
@@ -525,49 +533,28 @@ def main():
                 st.error("❌ Invalid JSON format")
                 existing_logs = current_logs  # Fall back to current logs
     
+    # Initialize result variable for tracking optimization results
+    result = None
+    
     # Main content area
     col1, col2 = st.columns([2, 1], gap="medium")
     
-    with col2:
-        st.subheader("Existing Logs")
-        
-        if existing_logs:
-            # Sort and display existing logs
-            existing_flat = flatten_logs(existing_logs)
-            existing_sorted = sorted(existing_flat, key=lambda x: x["diameter"], reverse=False)
-            
-            long_count = len([l for l in existing_logs if "long" in l])
-            short_count = len([l for l in existing_logs if "short" in l])
-            
-            st.metric("Total logs", len(existing_logs))
-            col2_1, col2_2 = st.columns(2)
-            with col2_1:
-                st.metric("Long logs", long_count)
-            with col2_2:
-                st.metric("Short logs", short_count)
-            
-            # Show sorted logs
-            st.subheader("Sorted by diameter:")
-            for log in existing_sorted:
-                if log['length'] == 'long':
-                    st.write(f"🪵 **{log['diameter']}L**")
-                else:
-                    st.write(f"🪵 **{log['diameter']}S**")
-        else:
-            st.info("No existing logs yet")
-            st.write("👈 Add logs using the sidebar or optimize with 0 existing logs")
-    
     with col1:
-        if existing_logs:
-            button_text = "🚀 **OPTIMIZE LOGS**"
-        else:
-            button_text = "🚀 **PLAN FROM SCRATCH**"
-            
-        if st.button(button_text, type="primary", use_container_width=False):
+        # Always show both buttons side by side
+        col_btn1, col_btn2 = st.columns(2, gap="small")
+        with col_btn1:
+            optimize_from_scratch = st.button("🚀 **OPTIMIZE FROM SCRATCH**", type="primary", use_container_width=True)
+        with col_btn2:
+            optimize_with_existing = st.button("🔧 **OPTIMIZE WITH EXISTING LOGS**", type="primary", use_container_width=True, disabled=not existing_logs)
+        
+        if optimize_from_scratch or optimize_with_existing:
             try:
                 with st.spinner("Optimizing your logs..."):
+                    # Determine which logs to use based on button pressed
+                    logs_to_use = [] if optimize_from_scratch else existing_logs
+                    
                     trees, layers, summary = optimize_logs(
-                        existing_logs, layers_count, root_log_diameters,
+                        logs_to_use, layers_count, root_log_diameters,
                         long_length, short_length, diameter_reduction_per_meter, shrinkage_percentage, bark_thickness, belly_groove_reduction, minimum_wall_height
                     )
                     
@@ -580,9 +567,13 @@ def main():
                         "total_height_raw_after_shrinkage_mm": summary["total_height_raw_after_shrinkage"],
                         "total_height_without_bark_after_shrinkage_mm": summary["total_height_without_bark_after_shrinkage"],
                     }
+                    
+                    # Store result in session state for access by existing logs display
+                    st.session_state.optimization_result = result
                 
                 # Display results
-                st.success("✅ Optimization complete!")
+                mode_text = "from scratch" if optimize_from_scratch else "using existing logs"
+                st.success(f"✅ Optimization complete ({mode_text})!")
                 
                 # Summary metrics
                 col_m1, col_m2 = st.columns(2)
@@ -596,12 +587,12 @@ def main():
                 with col_m1:
                     st.metric("📏 Raw height (no reductions)", f"{result.get('total_height_raw_after_shrinkage_mm', 0)} mm")
                 with col_m2:
-                    st.metric("📏 Height w/o bark", f"{result.get('total_height_without_bark_after_shrinkage_mm', 0)} mm")
+                    st.metric("📏 No bark height", f"{result.get('total_height_without_bark_after_shrinkage_mm', 0)} mm")
                 with col_m3:
-                    st.metric("📏 Final wall height (w/ shrinkage & belly groove)", f"{result['total_height_after_shrinkage_mm']} mm")
+                    st.metric("📏 Final height (dried & belly grooved)", f"{result['total_height_after_shrinkage_mm']} mm")
                 
                 # Trees to cut
-                with st.expander("🌲 **Trees to Cut**", expanded=True):
+                with st.expander("🌲 **Trees to Cut** (middle diameters)", expanded=True):
                     for i, tree in enumerate(result["trees"], 1):
                         formatted_logs = []
                         for log in tree:
@@ -625,17 +616,33 @@ def main():
                             if isinstance(log, dict) and any(k.startswith('_') for k in log.keys()):
                                 height_data = log
                             else:
+                                # Check if log is from existing_logs (before optimization)
+                                is_existing = log in existing_logs
+                                
                                 length = list(log.keys())[0]
                                 diameter = list(log.values())[0]
                                 diameters.append(diameter)
+                                
                                 if length == 'long':
-                                    formatted_logs.append(f"{diameter}L")
+                                    if is_existing:
+                                        formatted_logs.append(f"*{diameter}L*")
+                                    else:
+                                        formatted_logs.append(f"{diameter}L")
                                 else:
-                                    formatted_logs.append(f"{diameter}S")
+                                    if is_existing:
+                                        formatted_logs.append(f"*{diameter}S*")
+                                    else:
+                                        formatted_logs.append(f"{diameter}S")
                         
                         log_info = ", ".join(formatted_logs)
-                        variation = max(diameters) - min(diameters)
-                        avg_diameter = sum(diameters) / len(diameters)
+                        
+                        # Safety check to prevent max() on empty list
+                        if diameters:
+                            variation = max(diameters) - min(diameters)
+                            avg_diameter = sum(diameters) / len(diameters)
+                        else:
+                            variation = 0
+                            avg_diameter = 0
                         
                         # Color code based on variation
                         if variation <= 10:
@@ -649,10 +656,17 @@ def main():
                         height_info = ""
                         if height_data:
                             individual_heights = f"Heights: R{height_data.get('_raw_height', 0)}, NB{height_data.get('_height_without_bark', 0)}, F{height_data.get('_final_height', 0)}"
-                            accumulated_heights = f"Total: R{height_data.get('_accumulated_raw', 0)}, NB{height_data.get('_accumulated_without_bark', 0)}, F{height_data.get('_accumulated_final', 0)}"
+                            # Make entire "Total:" line bold if this is the last course
+                            if i == len(result["layers"]):
+                                accumulated_heights = f"**Total: R{height_data.get('_accumulated_raw', 0)}, NB{height_data.get('_accumulated_without_bark', 0)}, F{height_data.get('_accumulated_final', 0)}**"
+                            else:
+                                accumulated_heights = f"Total: R{height_data.get('_accumulated_raw', 0)}, NB{height_data.get('_accumulated_without_bark', 0)}, F{height_data.get('_accumulated_final', 0)}"
                             height_info = f" | {individual_heights} | {accumulated_heights}"
                         
-                        st.write(f"**Course {i:2}:** [{log_info}] {icon} (x̄: {avg_diameter:.0f} mm, Δ: {variation} mm{height_info})")
+                        # Format variation with extra space for single digits to improve alignment
+                        variation_text = f"Δ: {variation} mm\xa0\xa0" if variation < 10 else f"Δ: {variation} mm"
+                        course_text = f"**Course {i:2}:**\xa0\xa0\xa0" if i < 10 else f"**Course {i:2}:** "
+                        st.write(f"{course_text}[{log_info}] {icon} (ø: {avg_diameter:.0f} mm, {variation_text}{height_info})")
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
@@ -671,6 +685,64 @@ def main():
             - ✅ Create flat, even courses by matching similar diameters
             - ✅ Arrange courses with thickest at bottom, thinnest at top
             """)
+    
+    with col2:
+        st.subheader("Existing Logs")
+        
+        if existing_logs:
+            # Sort and display existing logs
+            existing_flat = flatten_logs(existing_logs)
+            existing_sorted = sorted(existing_flat, key=lambda x: x["diameter"], reverse=False)
+            
+            long_count = len([l for l in existing_logs if "long" in l])
+            short_count = len([l for l in existing_logs if "short" in l])
+            avg_diameter = sum(existing_flat[i]["diameter"] for i in range(len(existing_flat))) / len(existing_flat) if existing_flat else 0
+            
+            col2_1, col2_2 = st.columns(2)
+            with col2_1:
+                st.metric("Total logs", f"{len(existing_logs)}")
+            with col2_2:
+                st.metric("Average diameter", f"{avg_diameter:.0f} mm")
+
+            col2_1, col2_2 = st.columns(2)
+            with col2_1:
+                st.metric("Long logs", long_count)
+            with col2_2:
+                st.metric("Short logs", short_count)
+            
+            # Show sorted logs
+            st.subheader("Sorted by diameter:")
+            
+            # Check if we have optimization results to determine usage
+            if hasattr(st.session_state, 'optimization_result') and st.session_state.optimization_result:
+                # Collect all logs used in layers
+                used_logs = []
+                for layer in st.session_state.optimization_result["layers"]:
+                    for log in layer:
+                        if isinstance(log, dict) and not any(k.startswith('_') for k in log.keys()):
+                            used_logs.append(log)
+                
+                # Display existing logs with usage status
+                for log_flat in existing_sorted:
+                    # Reconstruct original log format for comparison
+                    original_log = {log_flat['length']: log_flat['diameter']}
+                    is_used = original_log in used_logs
+                    
+                    usage_text = "" if is_used else " (not used)"
+                    if log_flat['length'] == 'long':
+                        st.write(f"🪵 {log_flat['diameter']}L{usage_text}")
+                    else:
+                        st.write(f"🪵 {log_flat['diameter']}S{usage_text}")
+            else:
+                # No optimization results yet, show logs without usage info
+                for log in existing_sorted:
+                    if log['length'] == 'long':
+                        st.write(f"🪵 {log['diameter']}L")
+                    else:
+                        st.write(f"🪵 {log['diameter']}S")
+        else:
+            st.info("No existing logs yet")
+            st.write("👈 Add logs using the sidebar or optimize with 0 existing logs")
 
 if __name__ == "__main__":
     main()
